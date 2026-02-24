@@ -1,6 +1,6 @@
 ---
 - name: Leer report_*.html (sin dev) y enviar resumen a Teams
-  hosts: windows
+  hosts: all
   gather_facts: false
   collections:
     - ansible.windows
