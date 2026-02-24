@@ -30,7 +30,7 @@
       register: found_html
 
     - name: Extraer métricas desde el HTML (Functional + Coverage)
-      ansible.windows.win_shell: |
+      win_shell: |
         $p = "{{ (found_html.stdout | from_json).html_path }}"
         $s = Get-Content -Path $p -Raw
 
