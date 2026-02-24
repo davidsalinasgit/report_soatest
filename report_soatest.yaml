@@ -1,13 +1,13 @@
 ---
 - name: Leer report_*.html (sin dev) y enviar resumen a Teams
-  hosts: windows_report_host
+  hosts: windows
   gather_facts: false
   collections:
     - ansible.windows
 
   vars:
-    reports_dir: 'C:\Reportes\Soatest'   # <-- AJUSTA
-    teams_webhook_url: ''               # <-- Incoming webhook
+    reports_dir: 'C:\Reportes\Soatest'   # <-- AJUSTAR
+    teams_webhook_url: 'https://webhook.site/25f54011-16bb-4cd9-a650-98f5253a74a2'               # <-- AJUSTAR (Incoming Webhook URL)
 
   tasks:
     - name: Encontrar el HTML del día que NO es dev/dev1
@@ -15,7 +15,7 @@
         $dir = "{{ reports_dir }}"
         $today = (Get-Date).Date
 
-        $html = Get-ChildItem -Path $dir -Filter "report_*.html" -File |
+        $html = Get-ChildItem -Path $dir -Filter "report_*.htm*" -File |
           Where-Object {
             $_.LastWriteTime.Date -eq $today -and
             $_.Name -notmatch 'dev' -and
@@ -31,7 +31,7 @@
 
     - name: Extraer métricas desde el HTML (Functional + Coverage)
       ansible.windows.win_shell: |
-        $p = ({{ found_html.stdout | from_json }}).html_path
+        $p = "{{ (found_html.stdout | from_json).html_path }}"
         $s = Get-Content -Path $p -Raw
 
         # 1) Functional: "Failed and Incomplete: 4/141"
@@ -42,10 +42,8 @@
         $pass = $total - $fail
         $successPct = [math]::Round(($pass*100.0)/$total, 1)
 
-        # 2) API Coverage: buscamos el primer "(NN%)" dentro de la sección API Coverage
-        # (en tu ejemplo aparece "(100%)")
-        $apiSection = [regex]::Match($s, '>API Coverage</div>.*?(</table>)', 'Singleline,IgnoreCase').Value
-        $m2 = [regex]::Match($apiSection, '\((\d+)%\)', 'IgnoreCase')
+        # 2) API Coverage: buscar "(NN%)" cerca del anchor apicov (robusto)
+        $m2 = [regex]::Match($s, '(?s)name="apicov".{0,8000}?\((\d+)%\)', 'IgnoreCase')
         if ($m2.Success) { $apiCoverage = [int]$m2.Groups[1].Value } else { $apiCoverage = $null }
 
         [PSCustomObject]@{
@@ -57,10 +55,14 @@
         } | ConvertTo-Json -Depth 3
       register: metrics
 
-    - name: Preparar payload Teams (texto)
+  
+    - name: Preparar variables (html + métricas)
       ansible.builtin.set_fact:
         html: "{{ found_html.stdout | from_json }}"
         m: "{{ metrics.stdout | from_json }}"
+
+    - name: Preparar payload Teams (texto)
+      ansible.builtin.set_fact:
         teams_payload:
           "@type": "MessageCard"
           "@context": "https://schema.org/extensions"
@@ -71,6 +73,10 @@
             **Archivo:** {{ html.html_name }}<br/>
             **Functional Tests:** {{ m.pass }}/{{ m.total }} OK, {{ m.fail }}/{{ m.total }} Fail/Incomplete ({{ m.success_pct }}%)<br/>
             **API Coverage:** {{ (m.api_coverage_pct is not none) | ternary((m.api_coverage_pct|string) ~ '%','(no encontrado en HTML)') }}
+            
+    - name: DEBUG - mostrar payload final
+      ansible.builtin.debug:
+        var: teams_payload        
 
     - name: Enviar a Teams por webhook
       ansible.builtin.uri:
@@ -80,3 +86,4 @@
         body: "{{ teams_payload }}"
         status_code: [200]
       delegate_to: localhost
+      when: teams_webhook_url | length > 0
